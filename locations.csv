@@ -1,0 +1,11 @@
+name,width,depth,height,max_weight
+Shelf Small,36,18,60,300
+Shelf Wide,48,24,72,350
+Bin Deep,30,30,48,200
+Pallet Rack 1,48,40,60,1000
+Pallet Rack 2,96,48,72,2500
+Floor Bulk 1,72,48,60,1200
+Floor Bulk 2,84,60,72,1500
+Mezzanine,60,36,84,700
+Cold Storage,48,48,60,1100
+Bin Tall,24,24,96,200
