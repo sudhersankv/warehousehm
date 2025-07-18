@@ -1,6 +1,5 @@
 streamlit>=1.28.0
 pandas>=1.5 
 numpy>=1.21.0
-pyvista
+plotly
 py3dbp
-pyvista[jupyter]
