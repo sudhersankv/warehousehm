@@ -1,11 +1,10 @@
 # Imports
 import streamlit as st
-import pyvista as pv
 import pandas as pd
 import numpy as np
 from py3dbp import Packer, Bin, Item
-import tempfile
-import os
+import plotly.graph_objects as go
+import plotly.express as px
 from styles import get_styles
 
 # === CONFIGURATION ===
@@ -68,7 +67,7 @@ LOCATION_TYPE_LIST = list(LOCATION_TYPES.keys())
 PALLET_TYPE_LIST = list(PALLET_TYPES.keys())
 
 # Color scheme - Schneider Electric Green
-CARDBOARD_COLOR = "#3dcd58"
+SCHNEIDER_GREEN = "#00954A"
 PALLET_COLOR = "#8B4513"
 FLOOR_COLOR = "#708090"
 RACK_COLOR = "#2F4F4F"
@@ -92,6 +91,28 @@ def get_orientation_description(original_dims, current_dims):
         return "Standing (H×D×W)"
     else:
         return "Custom Orientation"
+
+# Function to create 3D box mesh for Plotly
+def create_box_mesh(x, y, z, width, depth, height, color, name="", opacity=0.8):
+    """Create a 3D box mesh for Plotly visualization"""
+    # Define the 8 vertices of a box
+    vertices_x = [x, x+width, x+width, x, x, x+width, x+width, x]
+    vertices_y = [y, y, y+depth, y+depth, y, y, y+depth, y+depth]
+    vertices_z = [z, z, z, z, z+height, z+height, z+height, z+height]
+    
+    # Define the 12 triangular faces of the box
+    i = [0, 0, 0, 7, 7, 7, 4, 4, 1, 1, 2, 2]
+    j = [1, 2, 4, 6, 4, 6, 5, 6, 5, 2, 6, 3]
+    k = [2, 3, 5, 2, 5, 2, 6, 5, 4, 6, 7, 7]
+    
+    return go.Mesh3d(
+        x=vertices_x, y=vertices_y, z=vertices_z,
+        i=i, j=j, k=k,
+        color=color,
+        opacity=opacity,
+        name=name,
+        showscale=False
+    )
 
 # Function to create individual SKU inputs
 def create_sku_inputs():
@@ -291,80 +312,95 @@ def pack_skus_max(skus, loc_dims, loc_max_weight, pallet_dims):
     
     return results
 
-# Visualization function
-def create_plotter(result, loc_w, loc_d, loc_h, loc_choice, pallet_choice, view_type="aisle"):
-    plotter = pv.Plotter()
-    plotter.enable_eye_dome_lighting()
+# Plotly 3D Visualization function
+def create_plotly_visualization(result, loc_w, loc_d, loc_h, loc_choice, pallet_choice, view_type="aisle"):
+    """Create 3D visualization using Plotly"""
+    fig = go.Figure()
     
     pallet_w, pallet_d, pallet_h, pallet_weight = result['pallet_dims']
     offset_x, offset_y = result['pallet_offset']
-
+    
+    # Add warehouse context for aisle view
     if view_type == "aisle":
-        floor = pv.Plane(center=(loc_w/2, loc_d/2, 0), direction=(0,0,1), i_size=loc_w*2, j_size=loc_d*2)
-        plotter.add_mesh(floor, color=FLOOR_COLOR, opacity=0.8)
-
-        left_rack = pv.Cube(center=(-15, loc_d/2, loc_h/2), x_length=5, y_length=loc_d, z_length=loc_h)
-        right_rack = pv.Cube(center=(loc_w + 15, loc_d/2, loc_h/2), x_length=5, y_length=loc_d, z_length=loc_h)
-        plotter.add_mesh(left_rack, color=RACK_COLOR)
-        plotter.add_mesh(right_rack, color=RACK_COLOR)
-
-    # Location wireframe
-    location = pv.Cube(center=(loc_w/2, loc_d/2, loc_h/2), x_length=loc_w, y_length=loc_d, z_length=loc_h)
-    plotter.add_mesh(location, style="wireframe", color="black", line_width=3)
+        # Floor
+        floor = create_box_mesh(
+            -loc_w*0.5, -loc_d*0.5, -2, 
+            loc_w*2, loc_d*2, 2, 
+            FLOOR_COLOR, "Floor", 0.3
+        )
+        fig.add_trace(floor)
+        
+        # Left and right racks
+        left_rack = create_box_mesh(-15, 0, 0, 5, loc_d, loc_h, RACK_COLOR, "Left Rack", 0.6)
+        right_rack = create_box_mesh(loc_w + 10, 0, 0, 5, loc_d, loc_h, RACK_COLOR, "Right Rack", 0.6)
+        fig.add_trace(left_rack)
+        fig.add_trace(right_rack)
     
-    plotter.add_text(f"{loc_choice}\n{loc_w}\"×{loc_d}\"×{loc_h}\"", 
-                    position=(loc_w/2, loc_d + 5, loc_h + 5), font_size=12, color="black")
-
+    # Location boundary (wireframe effect using thin boxes)
+    # Bottom edge
+    bottom_edge = create_box_mesh(0, 0, 0, loc_w, loc_d, 1, "rgba(0,0,0,0.8)", "Location Boundary", 0.3)
+    fig.add_trace(bottom_edge)
+    
     # Pallet
-    pallet_center_x = offset_x + pallet_w/2
-    pallet_center_y = offset_y + pallet_d/2
-    pallet = pv.Cube(center=(pallet_center_x, pallet_center_y, pallet_h/2), 
-                    x_length=pallet_w, y_length=pallet_d, z_length=pallet_h)
-    plotter.add_mesh(pallet, color=PALLET_COLOR, show_edges=True, edge_color="black")
+    pallet_center_x = offset_x
+    pallet_center_y = offset_y
+    pallet_mesh = create_box_mesh(
+        pallet_center_x, pallet_center_y, 0,
+        pallet_w, pallet_d, pallet_h,
+        PALLET_COLOR, f"{pallet_choice} Pallet", 0.8
+    )
+    fig.add_trace(pallet_mesh)
     
-    plotter.add_text(f"{pallet_choice} Pallet\n{pallet_w:.0f}\"×{pallet_d:.0f}\"×{pallet_h}\"", 
-                    position=(pallet_center_x, pallet_center_y + pallet_d/2 + 2, pallet_h + 2), 
-                    font_size=10, color="darkred")
-
-    # Items with Schneider Electric green gradient
+    # Add packed items with different colors for different layers
     packed_bin = result['packed_bin']
     if packed_bin and packed_bin.items:
-        color_palette = ["#3dcd58", "#2ea043", "#5dd46e", "#25843a", "#6ee081"]
+        # Schneider Electric green color palette
+        green_palette = ["#00954A", "#007C3E", "#4CAF50", "#66BB6A", "#81C784"]
         
         for i, item in enumerate(packed_bin.items):
             x, y, z = [float(p) for p in item.position]
             w, d, h = [float(dim) for dim in item.get_dimension()]
             
-            box_center_x = offset_x + x + w/2
-            box_center_y = offset_y + y + d/2
-            box_center_z = pallet_h + z + h/2
+            # Adjust position to account for pallet offset
+            box_x = offset_x + x
+            box_y = offset_y + y
+            box_z = pallet_h + z
             
             # Use different shades of green for different layers
             layer_index = int(z / 10)  # Rough layer grouping
-            color = color_palette[layer_index % len(color_palette)]
+            color = green_palette[layer_index % len(green_palette)]
             
-            box = pv.Cube(center=(box_center_x, box_center_y, box_center_z), 
-                         x_length=w, y_length=d, z_length=h)
-            plotter.add_mesh(box, color=color, show_edges=True, 
-                            edge_color="black", line_width=2, opacity=0.9)
-
-    # Camera positioning
-    if view_type == "aisle":
-        plotter.camera_position = [(loc_w/2, loc_d*2, loc_h), (loc_w/2, loc_d/2, loc_h/2), (0,0,1)]
-    elif view_type == "pallet":
-        plotter.camera_position = "xy"
-    elif view_type == "closeup":
-        plotter.camera_position = "xz"
-
-    return plotter
-
-def embed_interactive_3d(plotter, height=400):
-    with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as tmp:
-        plotter.export_html(tmp.name)
-        with open(tmp.name, "r") as f:
-            html = f.read()
-    os.unlink(tmp.name)
-    st.components.v1.html(html, height=height)
+            box_mesh = create_box_mesh(
+                box_x, box_y, box_z,
+                w, d, h,
+                color, f"SKU Item {i+1}", 0.9
+            )
+            fig.add_trace(box_mesh)
+    
+    # Update layout
+    fig.update_layout(
+        title=f"3D Warehouse Visualization - {view_type.title()} View",
+        scene=dict(
+            xaxis_title="Width (inches)",
+            yaxis_title="Depth (inches)",
+            zaxis_title="Height (inches)",
+            aspectmode='data',
+            bgcolor="rgba(240, 240, 240, 0.8)",
+            camera=dict(
+                eye=dict(
+                    x=1.5 if view_type == "aisle" else 1.2,
+                    y=1.5 if view_type == "aisle" else 1.2,
+                    z=1.2 if view_type != "top" else 2.5
+                )
+            )
+        ),
+        width=400,
+        height=400,
+        margin=dict(l=0, r=0, t=30, b=0),
+        showlegend=False
+    )
+    
+    return fig
 
 # === UI ===
 st.caption("Advanced 3D optimization with intelligent orientation analysis and layer-by-layer planning")
@@ -450,24 +486,24 @@ if st.button("Optimize Storage Configuration"):
                 </div>
                 """, unsafe_allow_html=True)
             
-            # 3D Visualizations
+            # 3D Visualizations using Plotly
             st.subheader(f"3D Visualization - {sku_name}")
             col1, col2, col3 = st.columns(3)
             
             with col1:
                 st.markdown('<div class="viz-container"><h4>Aisle View</h4></div>', unsafe_allow_html=True)
-                plotter = create_plotter(result, loc_w, loc_d, loc_h, loc_choice, pallet_choice, "aisle")
-                embed_interactive_3d(plotter)
+                fig_aisle = create_plotly_visualization(result, loc_w, loc_d, loc_h, loc_choice, pallet_choice, "aisle")
+                st.plotly_chart(fig_aisle, use_container_width=True)
 
             with col2:
                 st.markdown('<div class="viz-container"><h4>Top View</h4></div>', unsafe_allow_html=True)
-                plotter = create_plotter(result, loc_w, loc_d, loc_h, loc_choice, pallet_choice, "pallet")
-                embed_interactive_3d(plotter)
+                fig_top = create_plotly_visualization(result, loc_w, loc_d, loc_h, loc_choice, pallet_choice, "top")
+                st.plotly_chart(fig_top, use_container_width=True)
 
             with col3:
                 st.markdown('<div class="viz-container"><h4>Side View</h4></div>', unsafe_allow_html=True)
-                plotter = create_plotter(result, loc_w, loc_d, loc_h, loc_choice, pallet_choice, "closeup")
-                embed_interactive_3d(plotter)
+                fig_side = create_plotly_visualization(result, loc_w, loc_d, loc_h, loc_choice, pallet_choice, "side")
+                st.plotly_chart(fig_side, use_container_width=True)
 
 else:
     st.info("Configure your SKU details in the sidebar and click **Optimize Storage Configuration** to begin the analysis.")
